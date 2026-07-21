@@ -1,0 +1,712 @@
+Steps :
+
+$ cd /app/frontend && yarn expo install @gorhom/bottom-sheet expo-image-picker expo-document-picker expo-notifications react-native-svg react-native-gifted-charts expo-print expo-sharing expo-file-system 2>&1 | tail -30
+└─ react-native-svg@15.12.1 info All dependencies ├─ @gorhom/bottom-sheet@5.2.14 ├─ @gorhom/portal@1.0.14 ├─ @ide/backoff@1.0.0 ├─ assert@2.1.0 ├─ badgin@1.2.3 ├─ css-select@5.2.2 ├─ css-tree@1.1.3 ├─ css-what@6.2.2 ├─ dom-serializer@2.0.0 ├─ domutils@3.2.2 ├─ entities@4.5.0 ├─ expo-application@7.0.8 ├─ expo-document-picker@14.0.8 ├─ expo-image-loader@6.0.0 ├─ expo-image-picker@17.0.11 ├─ expo-notifications@0.32.17 ├─ expo-print@15.0.8 ├─ expo-sharing@14.0.8 ├─ gifted-charts-core@0.1.81 ├─ is-arguments@1.2.0 ├─ is-nan@1.3.2 ├─ mdn-data@2.0.14 ├─ nth-check@2.1.1 ├─ object-is@1.1.6 ├─ react-native-gifted-charts@1.4.77 ├─ react-native-svg@15.12.1 └─ util@0.12.5 Done in 6.92s. Exit code: 0
+
+
+"## TEST AGENT PROMPT – IMAGE INTEGRATION RULES ##
+You are the Test Agent responsible for validating image integrations.
+Follow these rules exactly. Do not overcomplicate.
+
+##############Created
+/app/image_testing.md
+*** Image Handling Rules ***
+- Always use base64-encoded images for all tests and requests.
+- Accepted formats: JPEG, PNG, WEBP only.
+- Do not use SVG, BMP, HEIC, or other formats.
+- Do not upload blank, solid-color, or uniform-variance images.
+- Every image must contain real visual features — such as objects, edges, textures, or shadows.
+- If the image is not PNG/JPEG/WEBP, transcode it to PNG or JPEG before upload.
+  ## Fix Example:
+    If you read a .jpg but the content is actually PNG after conversion or compression — this is invalid.
+    Always re-detect and update the MIME after transformations.
+- If the image is animated (e.g., GIF, APNG, WEBP animation), extract the first frame only.
+- Resize large images to reasonable bounds (avoid oversized payloads).
+"
+#########################################################################
+Created
+/app/backend/.env
+
+"from fastapi import FastAPI, APIRouter, HTTPException, Depends, Header, status
+from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
+from dotenv import load_dotenv
+from starlette.middleware.cors import CORSMiddleware
+from motor.motor_asyncio import AsyncIOMotorClient
+import os
+import logging
+from pathlib import Path
+from pydantic import BaseModel, Field, EmailStr
+from typing import List, Optional, Dict, Any
+import uuid
+from datetime import datetime, timezone, timedelta, date
+import jwt
+import bcrypt
+import json
+import re
+from emergentintegrations.llm.chat import LlmChat, UserMessage, ImageContent
+
+ROOT_DIR = Path(__file__).parent
+load_dotenv(ROOT_DIR / '.env')
+
+MONGO_URL = os.environ['MONGO_URL']
+DB_NAME = os.environ['DB_NAME']
+JWT_SECRET = os.environ.get('JWT_SECRET', 'dev-secret')
+JWT_ALGORITHM = os.environ.get('JWT_ALGORITHM', 'HS256')
+EMERGENT_LLM_KEY = os.environ.get('EMERGENT_LLM_KEY', '')
+
+client = AsyncIOMotorClient(MONGO_URL)
+db = client[DB_NAME]
+
+app = FastAPI(title=\"CareMeds API\")
+api_router = APIRouter(prefix=\"/api\")
+security = HTTPBearer(auto_error=False)
+
+
+def now_iso() -> str:
+    return datetime.now(timezone.utc).isoformat()
+
+
+def hash_password(pw: str) -> str:
+    return bcrypt.hashpw(pw.encode(), bcrypt.gensalt()).decode()
+
+
+def verify_password(pw: str, hashed: str) -> bool:
+    try:
+        return bcrypt.checkpw(pw.encode(), hashed.encode())
+    except Exception:
+        return False
+
+
+def create_token(user_id: str) -> str:
+    payload = {
+        \"sub\": user_id,
+        \"iat\": datetime.now(timezone.utc),
+        \"exp\": datetime.now(timezone.utc) + timedelta(days=30),
+    }
+    return jwt.encode(payload, JWT_SECRET, algorithm=JWT_ALGORITHM)
+
+
+async def get_current_user(creds: Optional[HTTPAuthorizationCredentials] = Depends(security)) -> Dict[str, Any]:
+    if not creds:
+        raise HTTPException(status_code=401, detail=\"Not authenticated\")
+    try:
+        payload = jwt.decode(creds.credentials, JWT_SECRET, algorithms=[JWT_ALGORITHM])
+        uid = payload.get(\"sub\")
+    except Exception:
+        raise HTTPException(status_code=401, detail=\"Invalid token\")
+    user = await db.users.find_one({\"id\": uid}, {\"_id\": 0, \"password\": 0})
+    if not user:
+        raise HTTPException(status_code=401, detail=\"User not found\")
+    return user
+
+
+# ============ MODELS ============
+class RegisterIn(BaseModel):
+    email: EmailStr
+    password: str
+    name: str
+
+
+class LoginIn(BaseModel):
+    email: EmailStr
+    password: str
+
+
+class ParentIn(BaseModel):
+    name: str
+    relation: str  # Mother, Father, etc.
+    date_of_birth: Optional[str] = None
+    blood_group: Optional[str] = None
+    allergies: Optional[str] = None
+    conditions: Optional[str] = None
+    emergency_contact: Optional[str] = None
+    family_doctor: Optional[str] = None
+    avatar_base64: Optional[str] = None
+
+
+class MedicineIn(BaseModel):
+    parent_id: str
+    name: str
+    generic_name: Optional[str] = None
+    dosage: Optional[str] = None  # 500 mg
+    quantity: int = 0  # total pills purchased
+    daily_dose: float = 1.0  # tablets per day
+    schedule: List[str] = []  # [\"morning\",\"afternoon\",\"evening\",\"night\"]
+    before_food: Optional[str] = None  # \"before\"|\"after\"|\"any\"
+    start_date: Optional[str] = None
+    end_date: Optional[str] = None
+    prescription_date: Optional[str] = None
+    doctor_name: Optional[str] = None
+    category: Optional[str] = None
+    pharmacy: Optional[str] = None
+    price: Optional[float] = None
+    prescription_image_base64: Optional[str] = None
+    notes: Optional[str] = None
+    active: bool = True
+
+
+class StockUpdateIn(BaseModel):
+    quantity_added: int
+
+
+class DoctorVisitIn(BaseModel):
+    parent_id: str
+    doctor_name: str
+    hospital: Optional[str] = None
+    specialty: Optional[str] = None
+    visit_date: str
+    diagnosis: Optional[str] = None
+    notes: Optional[str] = None
+    follow_up_date: Optional[str] = None
+    prescription_image_base64: Optional[str] = None
+    lab_report_base64: Optional[str] = None
+
+
+class AppointmentIn(BaseModel):
+    parent_id: str
+    doctor_name: str
+    hospital: Optional[str] = None
+    appointment_date: str  # ISO
+    purpose: Optional[str] = None
+    notes: Optional[str] = None
+
+
+class HealthRecordIn(BaseModel):
+    parent_id: str
+    record_type: str  # bp, sugar, weight, heart_rate, oxygen, cholesterol, other
+    value: str  # e.g. \"120/80\" or \"98\"
+    value2: Optional[str] = None
+    unit: Optional[str] = None
+    recorded_at: str
+    notes: Optional[str] = None
+
+
+class MedLogIn(BaseModel):
+    medicine_id: str
+    parent_id: str
+    scheduled_slot: str  # morning/afternoon/evening/night
+    scheduled_date: str  # YYYY-MM-DD
+    status: str  # taken, skipped, missed
+
+
+class OCRIn(BaseModel):
+    image_base64: str
+
+
+class MedInfoIn(BaseModel):
+    medicine_name: str
+
+
+# ============ AUTH ============
+@api_router.post(\"/auth/register\")
+async def register(payload: RegisterIn):
+    existing = await db.users.find_one({\"email\": payload.email.lower()})
+    if existing:
+        raise HTTPException(status_code=400, detail=\"Email already registered\")
+    uid = str(uuid.uuid4())
+    doc = {
+        \"id\": uid,
+        \"email\": payload.email.lower(),
+        \"name\": payload.name,
+        \"password\": hash_password(payload.password),
+        \"created_at\": now_iso(),
+    }
+    await db.users.insert_one(doc)
+    return {\"token\": create_token(uid), \"user\": {\"id\": uid, \"email\": doc[\"email\"], \"name\": doc[\"name\"]}}
+
+
+@api_router.post(\"/auth/login\")
+async def login(payload: LoginIn):
+    user = await db.users.find_one({\"email\": payload.email.lower()})
+    if not user or not verify_password(payload.password, user[\"password\"]):
+        raise HTTPException(status_code=401, detail=\"Invalid credentials\")
+    return {\"token\": create_token(user[\"id\"]), \"user\": {\"id\": user[\"id\"], \"email\": user[\"email\"], \"name\": user[\"name\"]}}
+
+
+@api_router.get(\"/auth/me\")
+async def me(user=Depends(get_current_user)):
+    return user
+
+
+# ============ PARENTS ============
+@api_router.post(\"/parents\")
+async def create_parent(payload: ParentIn, user=Depends(get_current_user)):
+    doc = payload.dict()
+    doc[\"id\"] = str(uuid.uuid4())
+    doc[\"user_id\"] = user[\"id\"]
+    doc[\"created_at\"] = now_iso()
+    await db.parents.insert_one(doc.copy())
+    doc.pop(\"_id\", None)
+    return doc
+
+
+@api_router.get(\"/parents\")
+async def list_parents(user=Depends(get_current_user)):
+    items = await db.parents.find({\"user_id\": user[\"id\"]}, {\"_id\": 0}).to_list(100)
+    return items
+
+
+@api_router.get(\"/parents/{pid}\")
+async def get_parent(pid: str, user=Depends(get_current_user)):
+    p = await db.parents.find_one({\"id\": pid, \"user_id\": user[\"id\"]}, {\"_id\": 0})
+    if not p:
+        raise HTTPException(404, \"Parent not found\")
+    return p
+
+
+@api_router.put(\"/parents/{pid}\")
+async def update_parent(pid: str, payload: ParentIn, user=Depends(get_current_user)):
+    upd = payload.dict()
+    r = await db.parents.update_one({\"id\": pid, \"user_id\": user[\"id\"]}, {\"$set\": upd})
+    if r.matched_count == 0:
+        raise HTTPException(404, \"Not found\")
+    p = await db.parents.find_one({\"id\": pid}, {\"_id\": 0})
+    return p
+
+
+@api_router.delete(\"/parents/{pid}\")
+async def delete_parent(pid: str, user=Depends(get_current_user)):
+    await db.parents.delete_one({\"id\": pid, \"user_id\": user[\"id\"]})
+    await db.medicines.delete_many({\"parent_id\": pid, \"user_id\": user[\"id\"]})
+    await db.visits.delete_many({\"parent_id\": pid, \"user_id\": user[\"id\"]})
+    await db.appointments.delete_many({\"parent_id\": pid, \"user_id\": user[\"id\"]})
+    await db.health_records.delete_many({\"parent_id\": pid, \"user_id\": user[\"id\"]})
+    return {\"ok\": True}
+
+
+# ============ MEDICINES ============
+def compute_stock_info(med: Dict[str, Any]) -> Dict[str, Any]:
+    qty = med.get(\"quantity\", 0) or 0
+    daily = med.get(\"daily_dose\", 1) or 1
+    # Sum of consumed logs (taken only)
+    # For MVP treat quantity as current remaining after user updates.
+    consumed = med.get(\"consumed\", 0) or 0
+    remaining = max(qty - consumed, 0)
+    days_left = int(remaining // daily) if daily > 0 else 0
+    runout_date = None
+    if daily > 0 and remaining > 0:
+        runout_date = (datetime.now(timezone.utc).date() + timedelta(days=days_left)).isoformat()
+    return {\"remaining\": remaining, \"days_left\": days_left, \"runout_date\": runout_date, \"low_stock\": days_left <= 7}
+
+
+@api_router.post(\"/medicines\")
+async def create_medicine(payload: MedicineIn, user=Depends(get_current_user)):
+    doc = payload.dict()
+    doc[\"id\"] = str(uuid.uuid4())
+    doc[\"user_id\"] = user[\"id\"]
+    doc[\"consumed\"] = 0
+    doc[\"created_at\"] = now_iso()
+    await db.medicines.insert_one(doc.copy())
+    doc.pop(\"_id\", None)
+    doc.update(compute_stock_info(doc))
+    return doc
+
+
+@api_router.get(\"/medicines\")
+async def list_medicines(parent_id: Optional[str] = None, user=Depends(get_current_user)):
+    q = {\"user_id\": user[\"id\"]}
+    if parent_id:
+        q[\"parent_id\"] = parent_id
+    items = await db.medicines.find(q, {\"_id\": 0}).to_list(500)
+    for m in items:
+        m.update(compute_stock_info(m))
+    return items
+
+
+@api_router.get(\"/medicines/{mid}\")
+async def get_medicine(mid: str, user=Depends(get_current_user)):
+    m = await db.medicines.find_one({\"id\": mid, \"user_id\": user[\"id\"]}, {\"_id\": 0})
+    if not m:
+        raise HTTPException(404, \"Not found\")
+    m.update(compute_stock_info(m))
+    return m
+
+
+@api_router.put(\"/medicines/{mid}\")
+async def update_medicine(mid: str, payload: MedicineIn, user=Depends(get_current_user)):
+    upd = payload.dict()
+    r = await db.medicines.update_one({\"id\": mid, \"user_id\": user[\"id\"]}, {\"$set\": upd})
+    if r.matched_count == 0:
+        raise HTTPException(404, \"Not found\")
+    m = await db.medicines.find_one({\"id\": mid}, {\"_id\": 0})
+    m.update(compute_stock_info(m))
+    return m
+
+
+@api_router.post(\"/medicines/{mid}/refill\")
+async def refill_medicine(mid: str, payload: StockUpdateIn, user=Depends(get_current_user)):
+    m = await db.medicines.find_one({\"id\": mid, \"user_id\": user[\"id\"]})
+    if not m:
+        raise HTTPException(404, \"Not found\")
+    new_qty = (m.get(\"quantity\", 0) or 0) + payload.quantity_added
+    await db.medicines.update_one({\"id\": mid}, {\"$set\": {\"quantity\": new_qty, \"consumed\": 0}})
+    m = await db.medicines.find_one({\"id\": mid}, {\"_id\": 0})
+    m.update(compute_stock_info(m))
+    return m
+
+
+@api_router.delete(\"/medicines/{mid}\")
+async def delete_medicine(mid: str, user=Depends(get_current_user)):
+    await db.medicines.delete_one({\"id\": mid, \"user_id\": user[\"id\"]})
+    await db.med_logs.delete_many({\"medicine_id\": mid, \"user_id\": user[\"id\"]})
+    return {\"ok\": True}
+
+
+# ============ MED LOGS (Taken/Skipped) ============
+@api_router.post(\"/med-logs\")
+async def log_medicine(payload: MedLogIn, user=Depends(get_current_user)):
+    # Check existing
+    existing = await db.med_logs.find_one({
+        \"medicine_id\": payload.medicine_id,
+        \"scheduled_slot\": payload.scheduled_slot,
+        \"scheduled_date\": payload.scheduled_date,
+        \"user_id\": user[\"id\"],
+    })
+    if existing:
+        # Update status
+        await db.med_logs.update_one({\"id\": existing[\"id\"]}, {\"$set\": {\"status\": payload.status, \"updated_at\": now_iso()}})
+        # Adjust consumed if changed to taken
+        med = await db.medicines.find_one({\"id\": payload.medicine_id})
+        if med and existing.get(\"status\") != \"taken\" and payload.status == \"taken\":
+            await db.medicines.update_one({\"id\": payload.medicine_id}, {\"$inc\": {\"consumed\": 1}})
+        elif med and existing.get(\"status\") == \"taken\" and payload.status != \"taken\":
+            await db.medicines.update_one({\"id\": payload.medicine_id}, {\"$inc\": {\"consumed\": -1}})
+        log = await db.med_logs.find_one({\"id\": existing[\"id\"]}, {\"_id\": 0})
+        return log
+    doc = payload.dict()
+    doc[\"id\"] = str(uuid.uuid4())
+    doc[\"user_id\"] = user[\"id\"]
+    doc[\"created_at\"] = now_iso()
+    await db.med_logs.insert_one(doc.copy())
+    if payload.status == \"taken\":
+        await db.medicines.update_one({\"id\": payload.medicine_id}, {\"$inc\": {\"consumed\": 1}})
+    doc.pop(\"_id\", None)
+    return doc
+
+
+@api_router.get(\"/med-logs\")
+async def list_med_logs(parent_id: Optional[str] = None, date_str: Optional[str] = None, user=Depends(get_current_user)):
+    q = {\"user_id\": user[\"id\"]}
+    if parent_id:
+        q[\"parent_id\"] = parent_id
+    if date_str:
+        q[\"scheduled_date\"] = date_str
+    items = await db.med_logs.find(q, {\"_id\": 0}).to_list(500)
+    return items
+
+
+# ============ DOCTOR VISITS ============
+@api_router.post(\"/visits\")
+async def create_visit(payload: DoctorVisitIn, user=Depends(get_current_user)):
+    doc = payload.dict()
+    doc[\"id\"] = str(uuid.uuid4())
+    doc[\"user_id\"] = user[\"id\"]
+    doc[\"created_at\"] = now_iso()
+    await db.visits.insert_one(doc.copy())
+    doc.pop(\"_id\", None)
+    return doc
+
+
+@api_router.get(\"/visits\")
+async def list_visits(parent_id: Optional[str] = None, user=Depends(get_current_user)):
+    q = {\"user_id\": user[\"id\"]}
+    if parent_id:
+        q[\"parent_id\"] = parent_id
+    items = await db.visits.find(q, {\"_id\": 0}).sort(\"visit_date\", -1).to_list(500)
+    return items
+
+
+@api_router.delete(\"/visits/{vid}\")
+async def delete_visit(vid: str, user=Depends(get_current_user)):
+    await db.visits.delete_one({\"id\": vid, \"user_id\": user[\"id\"]})
+    return {\"ok\": True}
+
+
+# ============ APPOINTMENTS ============
+@api_router.post(\"/appointments\")
+async def create_appt(payload: AppointmentIn, user=Depends(get_current_user)):
+    doc = payload.dict()
+    doc[\"id\"] = str(uuid.uuid4())
+    doc[\"user_id\"] = user[\"id\"]
+    doc[\"created_at\"] = now_iso()
+    await db.appointments.insert_one(doc.copy())
+    doc.pop(\"_id\", None)
+    return doc
+
+
+@api_router.get(\"/appointments\")
+async def list_appts(parent_id: Optional[str] = None, upcoming: bool = False, user=Depends(get_current_user)):
+    q = {\"user_id\": user[\"id\"]}
+    if parent_id:
+        q[\"parent_id\"] = parent_id
+    items = await db.appointments.find(q, {\"_id\": 0}).sort(\"appointment_date\", 1).to_list(500)
+    if upcoming:
+        today = datetime.now(timezone.utc).isoformat()
+        items = [a for a in items if a.get(\"appointment_date\", \"\") >= today[:10]]
+    return items
+
+
+@api_router.delete(\"/appointments/{aid}\")
+async def delete_appt(aid: str, user=Depends(get_current_user)):
+    await db.appointments.delete_one({\"id\": aid, \"user_id\": user[\"id\"]})
+    return {\"ok\": True}
+
+
+# ============ HEALTH RECORDS ============
+@api_router.post(\"/health-records\")
+async def create_hr(payload: HealthRecordIn, user=Depends(get_current_user)):
+    doc = payload.dict()
+    doc[\"id\"] = str(uuid.uuid4())
+    doc[\"user_id\"] = user[\"id\"]
+    doc[\"created_at\"] = now_iso()
+    await db.health_records.insert_one(doc.copy())
+    doc.pop(\"_id\", None)
+    return doc
+
+
+@api_router.get(\"/health-records\")
+async def list_hr(parent_id: Optional[str] = None, record_type: Optional[str] = None, user=Depends(get_current_user)):
+    q = {\"user_id\": user[\"id\"]}
+    if parent_id:
+        q[\"parent_id\"] = parent_id
+    if record_type:
+        q[\"record_type\"] = record_type
+    items = await db.health_records.find(q, {\"_id\": 0}).sort(\"recorded_at\", -1).to_list(500)
+    return items
+
+
+@api_router.delete(\"/health-records/{hid}\")
+async def delete_hr(hid: str, user=Depends(get_current_user)):
+    await db.health_records.delete_one({\"id\": hid, \"user_id\": user[\"id\"]})
+    return {\"ok\": True}
+
+
+# ============ DASHBOARD ============
+@api_router.get(\"/dashboard\")
+async def dashboard(parent_id: Optional[str] = None, user=Depends(get_current_user)):
+    q = {\"user_id\": user[\"id\"]}
+    if parent_id:
+        q[\"parent_id\"] = parent_id
+    meds = await db.medicines.find(q, {\"_id\": 0}).to_list(500)
+    for m in meds:
+        m.update(compute_stock_info(m))
+    low = [m for m in meds if m.get(\"active\") and m.get(\"low_stock\")]
+    today = datetime.now(timezone.utc).date().isoformat()
+    logs_today = await db.med_logs.find({**q, \"scheduled_date\": today}, {\"_id\": 0}).to_list(500)
+    taken = len([l for l in logs_today if l[\"status\"] == \"taken\"])
+    skipped = len([l for l in logs_today if l[\"status\"] == \"skipped\"])
+    missed = len([l for l in logs_today if l[\"status\"] == \"missed\"])
+    upcoming = await db.appointments.find({**q, \"appointment_date\": {\"$gte\": today}}, {\"_id\": 0}).sort(\"appointment_date\", 1).limit(5).to_list(5)
+    monthly_expense = sum([m.get(\"price\") or 0 for m in meds if m.get(\"active\")])
+    return {
+        \"active_medicines\": len([m for m in meds if m.get(\"active\")]),
+        \"low_stock_meds\": low,
+        \"adherence_today\": {\"taken\": taken, \"skipped\": skipped, \"missed\": missed},
+        \"upcoming_appointments\": upcoming,
+        \"monthly_expense\": monthly_expense,
+    }
+
+
+# ============ AI: OCR + MED INFO ============
+def _extract_json(text: str) -> Dict[str, Any]:
+    # find first {...}
+    m = re.search(r\"\{[\s\S]*\}\", text)
+    if m:
+        try:
+            return json.loads(m.group(0))
+        except Exception:
+            pass
+    return {}
+
+
+@api_router.post(\"/ai/ocr-prescription\")
+async def ai_ocr_prescription(payload: OCRIn, user=Depends(get_current_user)):
+    if not EMERGENT_LLM_KEY:
+        raise HTTPException(500, \"AI key not configured\")
+    try:
+        chat = LlmChat(
+            api_key=EMERGENT_LLM_KEY,
+            session_id=f\"ocr-{uuid.uuid4()}\",
+            system_message=(
+                \"You are a medical prescription OCR assistant. Extract medicines from a prescription image. \"
+                \"Return ONLY strict JSON with this shape: \"
+                '{\"doctor_name\": string|null, \"hospital\": string|null, \"date\": string|null, '
+                '\"medicines\": [{\"name\": string, \"dosage\": string|null, \"frequency\": string|null, '
+                '\"duration\": string|null, \"before_food\": \"before\"|\"after\"|null, \"notes\": string|null}]}'
+                \" Do not include any prose.\"
+            ),
+        ).with_model(\"gemini\", \"gemini-3-flash-preview\")
+        image = ImageContent(image_base64=payload.image_base64)
+        msg = UserMessage(text=\"Extract prescription details. Return JSON only.\", file_contents=[image])
+        # Use non-stream send
+        resp = await chat.send_message(msg)
+        data = _extract_json(resp if isinstance(resp, str) else str(resp))
+        return {\"raw\": resp if isinstance(resp, str) else str(resp), \"parsed\": data}
+    except Exception as e:
+        logging.exception(\"OCR failed\")
+        raise HTTPException(500, f\"OCR failed: {str(e)}\")
+
+
+@api_router.post(\"/ai/medicine-info\")
+async def ai_medicine_info(payload: MedInfoIn, user=Depends(get_current_user)):
+    if not EMERGENT_LLM_KEY:
+        raise HTTPException(500, \"AI key not configured\")
+    try:
+        chat = LlmChat(
+            api_key=EMERGENT_LLM_KEY,
+            session_id=f\"info-{uuid.uuid4()}\",
+            system_message=(
+                \"You are a pharmaceutical info assistant. Given a medicine brand name, return concise, general \"
+                \"public information. Return ONLY JSON with shape: \"
+                '{\"generic_name\": string, \"category\": string, \"typical_dosage\": string, '
+                '\"common_uses\": string, \"before_or_after_food\": \"before\"|\"after\"|\"any\", '
+                '\"common_side_effects\": string, \"disclaimer\": string}. No prose outside JSON.'
+            ),
+        ).with_model(\"gemini\", \"gemini-3-flash-preview\")
+        resp = await chat.send_message(UserMessage(text=f\"Medicine: {payload.medicine_name}\"))
+        data = _extract_json(resp if isinstance(resp, str) else str(resp))
+        return {\"parsed\": data, \"raw\": resp if isinstance(resp, str) else str(resp)}
+    except Exception as e:
+        logging.exception(\"Med info failed\")
+        raise HTTPException(500, f\"AI failed: {str(e)}\")
+
+
+# ============ SEARCH ============
+@api_router.get(\"/search\")
+async def search(q: str, user=Depends(get_current_user)):
+    regex = {\"$regex\": q, \"$options\": \"i\"}
+    meds = await db.medicines.find({\"user_id\": user[\"id\"], \"$or\": [{\"name\": regex}, {\"generic_name\": regex}, {\"category\": regex}]}, {\"_id\": 0}).to_list(100)
+    visits = await db.visits.find({\"user_id\": user[\"id\"], \"$or\": [{\"doctor_name\": regex}, {\"hospital\": regex}, {\"diagnosis\": regex}]}, {\"_id\": 0}).to_list(100)
+    appts = await db.appointments.find({\"user_id\": user[\"id\"], \"$or\": [{\"doctor_name\": regex}, {\"hospital\": regex}]}, {\"_id\": 0}).to_list(100)
+    return {\"medicines\": meds, \"visits\": visits, \"appointments\": appts}
+
+
+@api_router.get(\"/\")
+async def root():
+    return {\"message\": \"CareMeds API\", \"status\": \"ok\"}
+
+
+app.include_router(api_router)
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_credentials=True,
+    allow_origins=[\"*\"],
+    allow_methods=[\"*\"],
+    allow_headers=[\"*\"],
+)
+
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+logger = logging.getLogger(__name__)
+
+
+@app.on_event(\"shutdown\")
+async def shutdown_db_client():
+    client.close()
+"
+===================================================================
+/app/frintend/src/theme.ts##################
+
+"export const Colors = {
+  surface: '#FDFCFB',
+  onSurface: '#1A1A1A',
+  surfaceSecondary: '#F3F2EE',
+  onSurfaceSecondary: '#4A4A4A',
+  surfaceTertiary: '#EAE8E3',
+  onSurfaceTertiary: '#6A6A6A',
+  brand: '#6E9173',
+  brandDark: '#4B6650',
+  brandTertiary: '#E0EFE2',
+  onBrandTertiary: '#4B6650',
+  onBrand: '#FFFFFF',
+  success: '#6E9173',
+  warning: '#D9A05B',
+  error: '#C97A7E',
+  info: '#8F908A',
+  border: '#E0DFDA',
+  borderStrong: '#C2C0BA',
+  divider: '#EBEBE6',
+  white: '#FFFFFF',
+};
+
+export const Spacing = { xs: 4, sm: 8, md: 12, lg: 16, xl: 24, '2xl': 32, '3xl': 48 };
+export const Radius = { sm: 6, md: 12, lg: 20, pill: 999 };
+
+export const Fonts = {
+  regular: 'System',
+  medium: 'System',
+  bold: 'System',
+};
+"
+======================================================================
+
+Created
+/app/frontend/src/api.ts####################################
+"import * as SecureStore from 'expo-secure-store';
+import { Platform } from 'react-native';
+import AsyncStorage from '@react-native-async-storage/async-storage';
+
+const BASE = process.env.EXPO_PUBLIC_BACKEND_URL || '';
+
+const store = {
+  async get(key: string): Promise<string | null> {
+    if (Platform.OS === 'web') return AsyncStorage.getItem(key);
+    return SecureStore.getItemAsync(key);
+  },
+  async set(key: string, value: string): Promise<void> {
+    if (Platform.OS === 'web') return AsyncStorage.setItem(key, value);
+    return SecureStore.setItemAsync(key, value);
+  },
+  async del(key: string): Promise<void> {
+    if (Platform.OS === 'web') return AsyncStorage.removeItem(key);
+    return SecureStore.deleteItemAsync(key);
+  },
+};
+
+let token: string | null = null;
+
+export async function loadToken() {
+  token = await store.get('auth_token');
+  return token;
+}
+
+export async function saveToken(t: string) {
+  token = t;
+  await store.set('auth_token', t);
+}
+
+export async function clearToken() {
+  token = null;
+  await store.del('auth_token');
+}
+
+export function getToken() {
+  return token;
+}
+
+export async function api<T = any>(path: string, opts: RequestInit = {}): Promise<T> {
+  const url = `${BASE}/api${path}`;
+  const headers: any = {
+    'Content-Type': 'application/json',
+    ...(opts.headers || {}),
+  };
+  if (token) headers['Authorization'] = `Bearer ${token}`;
+  const res = await fetch(url, { ...opts, headers });
+  if (!res.ok) {
+    let msg = `HTTP ${res.status}`;
+    try {
+      const j = await res.json();
+      msg = j.detail || j.message || msg;
+    } catch {}
+    throw new Error(msg);
+  }
+  if (res.status === 204) return undefined as any;
+  return res.json();
+}
+"
+####################################################################
+
+
+
+
+
