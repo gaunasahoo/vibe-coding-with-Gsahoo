@@ -1,0 +1,131 @@
+Design a mobile app UI/UX guidelines for an AI-Powered Parent Medicine Management app (React Native / Expo SDK 54). **original_problem_statement**: Build a cross-platform mobile application (Android & iOS) that helps users manage their parents' medications, doctor visits, prescriptions, and medicine inventory. Core features: Parent Profiles (multiple - Mother/Father with medical info), Doctor Visit History (with prescription/PDF uploads), Medicine Management (dosage, frequency, before/after food, stock), Smart Medicine Inventory (auto-calculate remaining days), Medicine Reorder Reminders, Medication Schedule (daily timeline Morning/Afternoon/Evening/Night with Mark as Taken/Skipped and adherence tracking), Doctor Appointment Reminders, Health Records (BP, Sugar, Weight, HR, SpO2, charts), Dashboard (today's meds, upcoming appts, low stock, expiring, missed doses, expenses), Search & Reports (export PDF), and local notification-driven reminders. **user_choices**: No explicit design preferences provided by user. **key_functionalities**: Parent Profile Selector, Daily Medication Timeline (Morning/Afternoon/Evening/Night), Medicine Inventory with Low-Stock warnings, Doctor Visit History, Health Records with Trend Charts, Dashboard summary, Prescription image OCR, Appointment Reminders, Reports/Export **app_type**: health_app (medication management for elderly parents, caregiver-focused)
+EXECUTION IN PROGRESS
+
+Memory Fetched:
+Memory Fetched
+*****/app/design_guidelines.json ***
+{
+  "app_name": "CareMeds",
+  "personality": "1 iOS-Native Clean",
+  "personality_one_liner": "A deeply organized, warm, and trustworthy iOS-native experience that reduces caregiver anxiety through clarity, plain language, and empathetic spacing.",
+  "color": {
+    "surface": { "light": "#FDFCFB", "dark": "#181817" },
+    "onSurface": { "light": "#1A1A1A", "dark": "#EFEFEF" },
+    "surfaceSecondary": { "light": "#F3F2EE", "dark": "#242423" },
+    "onSurfaceSecondary": { "light": "#4A4A4A", "dark": "#C8C8C8" },
+    "surfaceTertiary": { "light": "#EAE8E3", "dark": "#30302E" },
+    "onSurfaceTertiary": { "light": "#6A6A6A", "dark": "#A0A0A0" },
+    "surfaceInverse": { "light": "#1A1A1A", "dark": "#EFEFEF" },
+    "onSurfaceInverse": { "light": "#FDFCFB", "dark": "#181817" },
+    "brand": { "light": "#6E9173", "dark": "#82A788" },
+    "brandPrimary": { "light": "#6E9173", "dark": "#82A788" },
+    "onBrandPrimary": { "light": "#FFFFFF", "dark": "#121A14" },
+    "brandSecondary": { "light": "#98B59C", "dark": "#A3C2A9" },
+    "onBrandSecondary": { "light": "#1A1A1A", "dark": "#181817" },
+    "brandTertiary": { "light": "#E0EFE2", "dark": "#2A3A2C" },
+    "onBrandTertiary": { "light": "#4B6650", "dark": "#93BFA4" },
+    "success": { "light": "#6E9173", "dark": "#82A788" },
+    "onSuccess": { "light": "#FFFFFF", "dark": "#121A14" },
+    "warning": { "light": "#D9A05B", "dark": "#DFB277" },
+    "onWarning": { "light": "#FFFFFF", "dark": "#1A130A" },
+    "error": { "light": "#C97A7E", "dark": "#D48E92" },
+    "onError": { "light": "#FFFFFF", "dark": "#201213" },
+    "info": { "light": "#8F908A", "dark": "#A0A09B" },
+    "onInfo": { "light": "#FFFFFF", "dark": "#181817" },
+    "border": { "light": "#E0DFDA", "dark": "#3A3A38" },
+    "borderStrong": { "light": "#C2C0BA", "dark": "#5A5A58" },
+    "divider": { "light": "#EBEBE6", "dark": "#2E2E2D" }
+  },
+  "typography": {
+    "displayFontFamily": "Plus Jakarta Sans",
+    "textFontFamily": "Plus Jakarta Sans",
+    "scale": { "sm": 12, "base": 14, "lg": 16, "xl": 20, "2xl": 24 }
+  },
+  "spacing": { 
+    "rule": "Generous vertical breathing room. Avoid dense dashboard rows; favor large, clearly separated cards for each medication timeblock. Sticky action buttons should float above the safe area bottom.", 
+    "xs": 4, "sm": 8, "md": 12, "lg": 16, "xl": 24, "2xl": 32, "3xl": 48 
+  },
+  "radius_tokens": { "sm": 6, "md": 12, "lg": 20, "pill": 999 },
+  "shadow_tier": "1",
+  "navigation": "bottom_tabs",
+  "icon_set": "Phosphor",
+  "glassmorphism": {
+    "enabled": true,
+    "do's": [
+      "Use frosted glass on the bottom tab bar to allow the daily timeline to gently scroll behind it.",
+      "Use glass on sticky date headers when scrolling through the medication schedule.",
+      "Apply glass effects on bottom-sheet drag handles for adding new medicine."
+    ],
+    "dont's": [
+      "Do not use glass on medication cards or form fields.",
+      "Do not blur primary CTA buttons."
+    ]
+  },
+  "platform_libraries": {
+    "glass": {
+      "ios": "expo-glass-effect",
+      "android": "expo-blur",
+      "low_end_android_fallback": "solid surfaceSecondary"
+    },
+    "image": "expo-image",
+    "blur": "expo-blur",
+    "bottom_sheet": "@gorhom/bottom-sheet",
+    "animation": "react-native-reanimated",
+    "gesture": "react-native-gesture-handler"
+  },
+  "screens": [
+    { 
+      "name": "Dashboard & Timeline", 
+      "purpose": "A clear, glanceable daily schedule showing Morning/Afternoon/Evening/Night medication blocks with one-tap adherence logging.", 
+      "states": { 
+        "loading": "Centered spinner matching the brand primary color.", 
+        "empty": "Illustration of a minimal pill box with 'No medications scheduled for today' and a prominent 'Add Medication' button.", 
+        "error": "Error message with 'Retry' button in center." 
+      }, 
+      "layout": "Screen starts with a Parent Profile selector at the top (avatar + name). Below is a glass-backed sticky date row. Content is divided into chronological sections (Morning, Afternoon, Evening, Night). Each section contains medicine cards. The card design must have one-tap [Taken] / [Skip] toggle above the fold with no scrolling, utilizing the primary brand color for 'Taken' and the error/terracotta color for 'Skip' or 'Missed'. Incorporate a floating action button (FAB) for quick-adding medications or scanning prescriptions via OCR."
+    },
+    { 
+      "name": "Health Records & Vitals", 
+      "purpose": "Central hub for tracking doctor visits, uploaded prescriptions, and charting vital trends (BP, Sugar).", 
+      "states": { 
+        "loading": "Skeleton UI showing empty chart lines.", 
+        "empty": "Warm prompt 'No health records added yet' with an 'Upload Prescription' CTA.", 
+        "error": "Failed to load records. Tap to retry." 
+      }, 
+      "layout": "A tabbed view or segmented control to switch between 'Vitals', 'Visits', and 'Prescriptions'. Vitals use clean line charts (with data points highlighted in brandPrimary). Doctor visits are represented as timeline cards displaying the doctor's name, date, and a thumbnail of the uploaded PDF/prescription. Large, thumb-friendly 'Add Record' button pinned at the bottom."
+    },
+    { 
+      "name": "Inventory & Alerts", 
+      "purpose": "Auto-calculates remaining medicine stock and alerts the caregiver when a refill is due.", 
+      "states": { 
+        "loading": "Spinner.", 
+        "empty": "No stock tracked yet. Start managing inventory.", 
+        "error": "Could not sync stock levels." 
+      }, 
+      "layout": "List view of all active medications. Cards display medicine name, dosage, and a prominent progress bar or 'Remaining Days' counter. Medicines with < 7 days stock are pinned at the top and highlighted with the warning (ochre) color. A 'Reorder' button is visible directly on the low-stock cards."
+    }
+  ],
+  "images": {
+    "hero_background": { 
+      "url": "https://images.unsplash.com/photo-1734606901353-5561d3c3ec72?crop=entropy&cs=srgb&fm=jpg&ixid=M3w3NTY2NzR8MHwxfHNlYXJjaHwxfHx3YXJtJTIwYWJzdHJhY3QlMjBzYWdlJTIwZ3JlZW4lMjB0ZXh0dXJlfGVufDB8fHx8MTc4Mzg5NDU2OHww&ixlib=rb-4.1.0&q=85", 
+      "alt": "Warm abstract sage green texture for background headers" 
+    },
+    "parent_profile_placeholder": { 
+      "url": "https://images.pexels.com/photos/8829191/pexels-photo-8829191.jpeg?auto=compress&cs=tinysrgb&dpr=2&h=650&w=940", 
+      "alt": "Happy senior parent smiling, used as a placeholder for the parent profile avatar" 
+    },
+    "empty_inventory_illustration": { 
+      "url": "https://images.pexels.com/photos/6753139/pexels-photo-6753139.jpeg?auto=compress&cs=tinysrgb&dpr=2&h=650&w=940", 
+      "alt": "Clean, minimal pill box casting a soft shadow, used for empty states" 
+    }
+  },
+  "instructions_to_main_agent": [
+    "Strictly follow the '1 iOS-Native Clean' personality guidelines. Do not introduce Android Material elements (no heavy dropshadows, no Roboto).",
+    "Adhere strictly to the color palette. Blue/Indigo/Purple are banned. Use the provided warm Sage Green (`#6E9173`), Terracotta (`#C97A7E`), and Warm Sand (`#F3F2EE`) tokens to create an empathetic, non-clinical environment.",
+    "Ensure 'Taken' / 'Skip' actions on the medication tracker cards are exposed directly on the card without requiring a modal or long-press. This is a critical usability learning from caregiver app research.",
+    "Implement glassmorphism (`expo-blur` / `expo-glass-effect`) on the bottom tab bar and sticky date headers over the timeline. Ensure the tint underneath provides enough contrast.",
+    "For text placed on top of images (e.g., Parent Profile cover image), ALWAYS implement a vertical linear gradient scrim (transparent to surfaceInverse at 70%+) to guarantee WCAG text contrast.",
+    "The primary CTA buttons must be sticky above the safe area bottom. Wrap scrolling areas so they do not overlap behind the fixed bottom CTAs."
+  ]
+}
+
